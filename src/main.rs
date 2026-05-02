@@ -52,6 +52,7 @@ struct Map {
     width: usize,
     height: usize,
     tiles: Vec<Vec<Tile>>,
+    base: (usize, usize),
 }
 
 impl Map {
@@ -108,6 +109,48 @@ impl Map {
             width,
             height,
             tiles,
+            base: (bx, by),
+        }
+    }
+}
+
+// ---------------- ROBOTS ----------------
+
+#[derive(Clone, Copy)]
+enum RobotKind {
+    Scout,
+    Collector,
+}
+
+struct Robot {
+    pos: (usize, usize),
+    kind: RobotKind,
+}
+
+impl Robot {
+    fn new(kind: RobotKind, pos: (usize, usize)) -> Self {
+        Self { kind, pos }
+    }
+
+    fn step(&mut self, map: &Map, rng: &mut impl Rng) {
+        let (x, y) = self.pos;
+        let mut dirs: [(i32, i32); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+        dirs.shuffle(rng);
+        for (dx, dy) in dirs {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if nx < 0 || ny < 0 {
+                continue;
+            }
+            let (nx, ny) = (nx as usize, ny as usize);
+            if nx >= map.width || ny >= map.height {
+                continue;
+            }
+            if matches!(map.tiles[ny][nx], Tile::Obstacle) {
+                continue;
+            }
+            self.pos = (nx, ny);
+            return;
         }
     }
 }
@@ -117,10 +160,25 @@ impl Map {
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
 ) -> io::Result<()> {
+    let mut rng = rand::thread_rng();
     let map = Map::new(80, 25);
 
+    let mut robots: Vec<Robot> = Vec::new();
+    for _ in 0..3 {
+        robots.push(Robot::new(RobotKind::Scout, map.base));
+    }
+    for _ in 0..2 {
+        robots.push(Robot::new(RobotKind::Collector, map.base));
+    }
+
+    let totals = (0u32, 0u32); // (energy, crystals) — alimenté au commit 3
+
     loop {
-        terminal.draw(|f| ui(f, &map))?;
+        for robot in &mut robots {
+            robot.step(&map, &mut rng);
+        }
+
+        terminal.draw(|f| ui(f, &map, &robots, totals))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -135,47 +193,61 @@ fn run_app<B: ratatui::backend::Backend>(
 
 // ---------------- UI ----------------
 
-fn ui(f: &mut Frame, map: &Map) {
+fn ui(f: &mut Frame, map: &Map, robots: &[Robot], totals: (u32, u32)) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // header minimal
-            Constraint::Min(0),    // map prend tout le reste
+            Constraint::Length(1),
+            Constraint::Min(0),
         ])
         .split(f.size());
 
-    // HEADER
-    let header = Paragraph::new("Resource Simulation - Step 2 (q to quit)")
+    let header_text = format!(
+        "Resource Simulation  Energy:{}  Crystals:{}  (q to quit)",
+        totals.0, totals.1
+    );
+    let header = Paragraph::new(header_text)
         .block(Block::default().borders(Borders::NONE));
-
     f.render_widget(header, chunks[0]);
 
-    // MAP RENDER (cell by cell)
-    let mut lines: Vec<Line> = Vec::new();
-
+    // Build display grid: tiles first, robots overlay on top
+    let mut grid: Vec<Vec<(char, Style)>> =
+        vec![vec![(' ', Style::default()); map.width]; map.height];
     for y in 0..map.height {
-        let mut spans: Vec<Span> = Vec::new();
-
         for x in 0..map.width {
-            let (symbol, style) = match map.tiles[y][x] {
+            grid[y][x] = match map.tiles[y][x] {
                 Tile::Empty => (' ', Style::default()),
                 Tile::Obstacle => ('O', Style::default().fg(Color::LightCyan)),
                 Tile::Base => ('#', Style::default().fg(Color::LightGreen)),
                 Tile::Energy(_) => ('E', Style::default().fg(Color::Green)),
                 Tile::Crystal(_) => ('C', Style::default().fg(Color::LightMagenta)),
             };
-
-            spans.push(Span::styled(symbol.to_string(), style));
         }
-
-        lines.push(Line::from(spans));
     }
+    for robot in robots {
+        let (x, y) = robot.pos;
+        let (sym, color) = match robot.kind {
+            RobotKind::Scout => ('x', Color::Red),
+            RobotKind::Collector => ('o', Color::Magenta),
+        };
+        grid[y][x] = (sym, Style::default().fg(color));
+    }
+
+    let lines: Vec<Line> = grid
+        .iter()
+        .map(|row| {
+            Line::from(
+                row.iter()
+                    .map(|(c, s)| Span::styled(c.to_string(), *s))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
 
     let map_widget = Paragraph::new(lines).block(
         Block::default()
             .title("Map")
             .borders(Borders::ALL),
     );
-
     f.render_widget(map_widget, chunks[1]);
 }
