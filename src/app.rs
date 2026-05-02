@@ -15,7 +15,7 @@ use crate::robot::{run_collector, run_scout};
 use crate::ui::ui;
 use crate::world::{ResourceKind, Robot, RobotEvent, RobotKind, WorldState};
 
-pub(crate) fn run<B: ratatui::backend::Backend>(
+pub(crate) fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
 ) -> io::Result<()> {
     let (map, initial_resources) = Map::new(80, 25);
