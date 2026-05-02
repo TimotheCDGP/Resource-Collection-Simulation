@@ -22,6 +22,9 @@ use noise::{NoiseFn, Perlin};
 use rand::Rng;
 use rand::seq::SliceRandom;
 
+mod world;
+use crate::world::{ResourceKind, Robot, RobotEvent, RobotKind, WorldState};
+
 fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -121,43 +124,6 @@ impl Map {
     fn passable(&self, pos: (usize, usize)) -> bool {
         !matches!(self.tiles[pos.1][pos.0], Tile::Obstacle)
     }
-}
-
-// ---------------- ROBOTS ----------------
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum ResourceKind {
-    Energy,
-    Crystal,
-}
-
-#[derive(Clone, Copy)]
-enum RobotKind {
-    Scout,
-    Collector,
-}
-
-#[derive(Clone)]
-struct Robot {
-    pos: (usize, usize),
-    kind: RobotKind,
-    carrying: Option<ResourceKind>,
-}
-
-// ---------------- WORLD STATE ----------------
-
-struct WorldState {
-    resources: HashMap<(usize, usize), (ResourceKind, u32)>, // remaining quantities
-    known: HashMap<(usize, usize), ResourceKind>,            // discovered by scouts
-    robots: Vec<Robot>,
-    totals: (u32, u32), // (energy, crystals) deposited at base
-}
-
-// ---------------- EVENTS ----------------
-
-enum RobotEvent {
-    Discovered { pos: (usize, usize), kind: ResourceKind },
-    Collected { kind: ResourceKind, amount: u32 },
 }
 
 // ---------------- MOVEMENT HELPERS ----------------
