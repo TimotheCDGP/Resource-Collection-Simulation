@@ -13,7 +13,7 @@ use ratatui::Terminal;
 use crate::map::Map;
 use crate::robot::{run_collector, run_scout};
 use crate::ui::ui;
-use crate::world::{ResourceKind, Robot, RobotEvent, RobotKind, WorldState};
+use crate::world::{Knowledge, ResourceKind, Robot, RobotEvent, RobotKind, WorldState};
 
 pub(crate) fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
@@ -39,9 +39,28 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
 
     let kinds: Vec<RobotKind> = robots.iter().map(|r| r.kind).collect();
 
+    // Carte de connaissance : tout est inconnu sauf les abords de la base,
+    // où les robots démarrent et perçoivent déjà le terrain.
+    let mut known_map = vec![vec![Knowledge::Unknown; map.width]; map.height];
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let nx = map.base.0 as i32 + dx;
+            let ny = map.base.1 as i32 + dy;
+            if nx >= 0 && nx < map.width as i32 && ny >= 0 && ny < map.height as i32 {
+                known_map[ny as usize][nx as usize] = if map.passable((nx as usize, ny as usize))
+                {
+                    Knowledge::Free
+                } else {
+                    Knowledge::Obstacle
+                };
+            }
+        }
+    }
+
     let state = Arc::new(Mutex::new(WorldState {
         resources: initial_resources,
         known: HashMap::new(),
+        known_map,
         robots,
         totals: (0, 0),
     }));
@@ -82,10 +101,10 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
         // Snapshot for rendering, then release the lock before drawing
         let snap = {
             let s = state.lock().unwrap();
-            (s.robots.clone(), s.resources.clone(), s.totals)
+            (s.robots.clone(), s.known_map.clone(), s.known.clone(), s.totals)
         };
 
-        terminal.draw(|f| ui(f, &map, &snap.0, &snap.1, snap.2))?;
+        terminal.draw(|f| ui(f, &map, &snap.0, &snap.1, &snap.2, snap.3))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {

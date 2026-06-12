@@ -9,7 +9,36 @@ use std::time::Duration;
 
 use crate::map::Map;
 use crate::pathfinding::{bfs_first_steps, random_step};
-use crate::world::{RobotEvent, WorldState};
+use crate::world::{Knowledge, RobotEvent, WorldState};
+
+/// Met à jour la connaissance de la base pour les cellules adjacentes à `pos`
+/// (rayon 1) à partir du terrain réel. Chaque robot perçoit ses abords
+/// immédiats à chaque tick, ce qui dévoile progressivement la carte.
+fn perceive(pos: (usize, usize), map: &Map, s: &mut WorldState) {
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let nx = pos.0 as i32 + dx;
+            let ny = pos.1 as i32 + dy;
+            if nx < 0 || ny < 0 {
+                continue;
+            }
+            let (nx, ny) = (nx as usize, ny as usize);
+            if nx >= map.width || ny >= map.height {
+                continue;
+            }
+            let cell = (nx, ny);
+            let res_here = s.resources.get(&cell).map(|&(k, _)| k);
+            s.known_map[ny][nx] = if map.passable(cell) {
+                Knowledge::Free
+            } else {
+                Knowledge::Obstacle
+            };
+            if let Some(kind) = res_here {
+                s.known.entry(cell).or_insert(kind);
+            }
+        }
+    }
+}
 
 pub(crate) fn run_scout(
     id: usize,
@@ -20,8 +49,10 @@ pub(crate) fn run_scout(
     let mut rng = rand::thread_rng();
     loop {
         let cur_pos = {
-            let s = state.lock().unwrap();
-            s.robots[id].pos
+            let mut s = state.lock().unwrap();
+            let p = s.robots[id].pos;
+            perceive(p, &map, &mut s);
+            p
         };
         let new_pos = random_step(cur_pos, &map, &mut rng);
 
@@ -49,15 +80,17 @@ pub(crate) fn run_collector(
     let base = map.base;
     loop {
         let (cur_pos, carrying, known_positions) = {
-            let s = state.lock().unwrap();
-            let me = &s.robots[id];
+            let mut s = state.lock().unwrap();
+            let pos = s.robots[id].pos;
+            perceive(pos, &map, &mut s);
+            let carrying = s.robots[id].carrying;
             let known: Vec<(usize, usize)> = s
                 .known
                 .keys()
                 .filter(|&&p| s.resources.contains_key(&p))
                 .copied()
                 .collect();
-            (me.pos, me.carrying, known)
+            (pos, carrying, known)
         };
 
         // 1. Carrying & at base → deposit

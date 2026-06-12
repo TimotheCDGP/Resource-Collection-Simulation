@@ -1,6 +1,6 @@
-//! Rendu Ratatui : header (compteurs) et grille fusionnant terrain, ressources
-//! et robots. Le rendu est piloté par un snapshot pour éviter de bloquer les
-//! threads pendant le draw.
+//! Rendu Ratatui : header (compteurs) et grille fusionnant la carte de
+//! connaissance (brouillard), les ressources découvertes et les robots. Le
+//! terrain non encore exploré reste masqué.
 
 use std::collections::HashMap;
 
@@ -12,14 +12,15 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::map::{Map, Tile};
-use crate::world::{ResourceKind, Robot, RobotKind};
+use crate::map::Map;
+use crate::world::{Knowledge, ResourceKind, Robot, RobotKind};
 
 pub(crate) fn ui(
     f: &mut Frame,
     map: &Map,
     robots: &[Robot],
-    resources: &HashMap<(usize, usize), (ResourceKind, u32)>,
+    known_map: &[Vec<Knowledge>],
+    known_resources: &HashMap<(usize, usize), ResourceKind>,
     totals: (u32, u32),
 ) {
     let chunks = Layout::default()
@@ -38,18 +39,26 @@ pub(crate) fn ui(
         .block(Block::default().borders(Borders::NONE));
     f.render_widget(header, chunks[0]);
 
+    // Terrain depuis la connaissance de la base : l'inconnu reste masqué.
     let mut grid: Vec<Vec<(char, Style)>> =
         vec![vec![(' ', Style::default()); map.width]; map.height];
     for y in 0..map.height {
         for x in 0..map.width {
-            grid[y][x] = match map.tiles[y][x] {
-                Tile::Empty => (' ', Style::default()),
-                Tile::Obstacle => ('O', Style::default().fg(Color::LightCyan)),
-                Tile::Base => ('#', Style::default().fg(Color::LightGreen)),
+            grid[y][x] = match known_map[y][x] {
+                Knowledge::Unknown => ('.', Style::default().fg(Color::DarkGray)),
+                Knowledge::Obstacle => ('O', Style::default().fg(Color::LightCyan)),
+                Knowledge::Free => {
+                    if (x, y) == map.base {
+                        ('#', Style::default().fg(Color::LightGreen))
+                    } else {
+                        (' ', Style::default())
+                    }
+                }
             };
         }
     }
-    for (&(x, y), &(kind, _)) in resources {
+    // Ressources découvertes uniquement.
+    for (&(x, y), &kind) in known_resources {
         let (sym, color) = match kind {
             ResourceKind::Energy => ('E', Color::Green),
             ResourceKind::Crystal => ('C', Color::LightMagenta),
