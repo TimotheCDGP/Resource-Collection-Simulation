@@ -35,11 +35,15 @@ pub(crate) fn random_step(
     from
 }
 
-/// BFS depuis `from` : retourne pour chaque cellule atteignable le premier pas
-/// à faire depuis `from` pour s'y rendre via un plus court chemin.
+/// BFS générique depuis `from`. La closure `passable` décide de la
+/// franchissabilité de chaque cellule, ce qui permet de planifier aussi bien
+/// sur le terrain réel que sur la carte de connaissance. Retourne, pour chaque
+/// cellule atteignable, le premier pas à faire depuis `from`.
 pub(crate) fn bfs_first_steps(
     from: (usize, usize),
-    map: &Map,
+    width: usize,
+    height: usize,
+    passable: impl Fn((usize, usize)) -> bool,
 ) -> HashMap<(usize, usize), (usize, usize)> {
     let mut first_step: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
     let mut queue: VecDeque<((usize, usize), (usize, usize))> = VecDeque::new();
@@ -54,11 +58,11 @@ pub(crate) fn bfs_first_steps(
                 continue;
             }
             let (nxu, nyu) = (nx as usize, ny as usize);
-            if nxu >= map.width || nyu >= map.height {
+            if nxu >= width || nyu >= height {
                 continue;
             }
             let np = (nxu, nyu);
-            if !map.passable(np) {
+            if !passable(np) {
                 continue;
             }
             if first_step.contains_key(&np) {

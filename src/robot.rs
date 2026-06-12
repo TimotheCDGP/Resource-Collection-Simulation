@@ -79,7 +79,7 @@ pub(crate) fn run_collector(
     let mut rng = rand::thread_rng();
     let base = map.base;
     loop {
-        let (cur_pos, carrying, known_positions) = {
+        let (cur_pos, carrying, known_positions, known_map) = {
             let mut s = state.lock().unwrap();
             let pos = s.robots[id].pos;
             perceive(pos, &map, &mut s);
@@ -90,7 +90,8 @@ pub(crate) fn run_collector(
                 .filter(|&&p| s.resources.contains_key(&p))
                 .copied()
                 .collect();
-            (pos, carrying, known)
+            let known_map = s.known_map.clone();
+            (pos, carrying, known, known_map)
         };
 
         // 1. Carrying & at base → deposit
@@ -133,9 +134,13 @@ pub(crate) fn run_collector(
             }
         }
 
-        // 3. BFS depuis ma position : trouve le premier pas vers la cible la plus proche
-        //    réellement atteignable (et non simplement à courte distance Manhattan).
-        let first_steps = bfs_first_steps(cur_pos, &map);
+        // 3. BFS sur la carte *connue* uniquement : un obstacle découvert bloque,
+        //    l'inconnu est supposé franchissable (on le découvrira en avançant).
+        //    Comme les abords immédiats viennent d'être perçus, le premier pas
+        //    n'entre jamais dans un mur déjà repéré.
+        let first_steps = bfs_first_steps(cur_pos, map.width, map.height, |c| {
+            known_map[c.1][c.0] != Knowledge::Obstacle
+        });
         let target = if carrying.is_some() {
             if first_steps.contains_key(&base) {
                 Some(base)
