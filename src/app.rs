@@ -7,7 +7,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event};
 use ratatui::Terminal;
 
 use crate::map::Map;
@@ -88,10 +88,10 @@ pub(crate) fn run_app<B: ratatui::backend::Backend>(
         terminal.draw(|f| ui(f, &map, &snap.0, &snap.1, snap.2))?;
 
         if event::poll(Duration::from_millis(100))? {
+            // Spec : toute pression de touche quitte la simulation.
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    _ => {}
+                if key.kind == event::KeyEventKind::Press {
+                    return Ok(());
                 }
             }
         }
