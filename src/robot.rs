@@ -10,11 +10,40 @@ use std::time::Duration;
 
 use crate::map::Map;
 use crate::pathfinding::{bfs_first_steps, random_step};
-use crate::world::{RobotEvent, ResourceKind, WorldState};
+use crate::world::{Knowledge, ResourceKind, RobotEvent, WorldState};
 
 /// Rayon (en cases) dans lequel un éclaireur perçoit les ressources autour de
 /// lui. 0 reviendrait à ne découvrir qu'en marchant exactement dessus.
 const SCOUT_VISION: i32 = 2;
+
+/// Met à jour la connaissance de la base pour les cellules adjacentes à `pos`
+/// (rayon 1) à partir du terrain réel. Chaque robot perçoit ses abords
+/// immédiats à chaque tick, ce qui dévoile progressivement la carte.
+fn perceive(pos: (usize, usize), map: &Map, s: &mut WorldState) {
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let nx = pos.0 as i32 + dx;
+            let ny = pos.1 as i32 + dy;
+            if nx < 0 || ny < 0 {
+                continue;
+            }
+            let (nx, ny) = (nx as usize, ny as usize);
+            if nx >= map.width || ny >= map.height {
+                continue;
+            }
+            let cell = (nx, ny);
+            let res_here = s.resources.get(&cell).map(|&(k, _)| k);
+            s.known_map[ny][nx] = if map.passable(cell) {
+                Knowledge::Free
+            } else {
+                Knowledge::Obstacle
+            };
+            if let Some(kind) = res_here {
+                s.known.entry(cell).or_insert(kind);
+            }
+        }
+    }
+}
 
 pub(crate) fn run_scout(
     id: usize,
@@ -24,12 +53,15 @@ pub(crate) fn run_scout(
 ) {
     let mut rng = rand::thread_rng();
     loop {
-        // Choix du déplacement et scan de vision sous un seul lock : la case
+        // Déplacement, perception et scan de vision sous un seul lock : la case
         // visée est garantie libre au moment de l'écriture, donc deux robots
         // ne peuvent jamais se retrouver sur la même case.
         let discoveries: Vec<((usize, usize), ResourceKind)> = {
             let mut s = state.lock().unwrap();
             let cur_pos = s.robots[id].pos;
+            // Dévoile la carte de connaissance autour de la position courante.
+            perceive(cur_pos, &map, &mut s);
+
             let occupied: HashSet<(usize, usize)> = s
                 .robots
                 .iter()
@@ -77,15 +109,20 @@ pub(crate) fn run_collector(
     let mut rng = rand::thread_rng();
     let base = map.base;
     loop {
-        let (cur_pos, carrying, known_positions, occupied) = {
-            let s = state.lock().unwrap();
-            let me = &s.robots[id];
+        let (cur_pos, carrying, known_positions, known_map, occupied) = {
+            let mut s = state.lock().unwrap();
+            let pos = s.robots[id].pos;
+            // Perçoit les abords immédiats avant de planifier : le premier pas
+            // du BFS ne pourra jamais entrer dans un mur déjà repéré.
+            perceive(pos, &map, &mut s);
+            let carrying = s.robots[id].carrying;
             let known: Vec<(usize, usize)> = s
                 .known
                 .keys()
                 .filter(|&&p| s.resources.contains_key(&p))
                 .copied()
                 .collect();
+            let known_map = s.known_map.clone();
             let occ: HashSet<(usize, usize)> = s
                 .robots
                 .iter()
@@ -93,7 +130,7 @@ pub(crate) fn run_collector(
                 .filter(|&(i, _)| i != id)
                 .map(|(_, r)| r.pos)
                 .collect();
-            (me.pos, me.carrying, known, occ)
+            (pos, carrying, known, known_map, occ)
         };
 
         // 1. Carrying & at base → deposit
@@ -136,9 +173,13 @@ pub(crate) fn run_collector(
             }
         }
 
-        // 3. BFS depuis ma position : trouve le premier pas vers la cible la plus proche
-        //    réellement atteignable (et non simplement à courte distance Manhattan).
-        let first_steps = bfs_first_steps(cur_pos, &map);
+        // 3. BFS sur la carte *connue* uniquement : un obstacle découvert bloque,
+        //    l'inconnu est supposé franchissable (on le découvrira en avançant).
+        //    Comme les abords immédiats viennent d'être perçus, le premier pas
+        //    n'entre jamais dans un mur déjà repéré.
+        let first_steps = bfs_first_steps(cur_pos, map.width, map.height, |c| {
+            known_map[c.1][c.0] != Knowledge::Obstacle
+        });
         let target = if carrying.is_some() {
             if first_steps.contains_key(&base) {
                 Some(base)
@@ -161,9 +202,14 @@ pub(crate) fn run_collector(
         let new_pos = match target {
             Some(t) if t != cur_pos => {
                 let step = first_steps.get(&t).copied().unwrap_or(cur_pos);
-                // Si le pas calculé est occupé par un autre robot, on attend
-                // (on reste sur place) plutôt que d'entrer en collision.
-                if occupied.contains(&step) { cur_pos } else { step }
+                // Si le pas calculé est occupé par un autre robot, on tente un
+                // déplacement aléatoire libre plutôt que de rester bloqué : évite
+                // qu'un collecteur reste figé derrière un robot immobile.
+                if occupied.contains(&step) {
+                    random_step(cur_pos, &map, &occupied, &mut rng)
+                } else {
+                    step
+                }
             }
             _ => random_step(cur_pos, &map, &occupied, &mut rng),
         };
