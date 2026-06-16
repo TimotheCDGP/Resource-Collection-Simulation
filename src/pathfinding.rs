@@ -2,16 +2,19 @@
 //! et BFS calculant le premier pas du plus court chemin vers chaque cellule
 //! atteignable.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use rand::Rng;
 use rand::seq::SliceRandom;
 
 use crate::map::Map;
 
+/// Pas aléatoire vers une case voisine traversable et non occupée par un autre
+/// robot. Si aucune case libre n'est disponible, le robot reste sur place.
 pub(crate) fn random_step(
     from: (usize, usize),
     map: &Map,
+    occupied: &HashSet<(usize, usize)>,
     rng: &mut impl Rng,
 ) -> (usize, usize) {
     let (x, y) = from;
@@ -28,6 +31,9 @@ pub(crate) fn random_step(
             continue;
         }
         if !map.passable((nx, ny)) {
+            continue;
+        }
+        if occupied.contains(&(nx, ny)) {
             continue;
         }
         return (nx, ny);

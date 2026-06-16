@@ -30,7 +30,7 @@ impl Map {
         height: usize,
     ) -> (Self, HashMap<(usize, usize), (ResourceKind, u32)>) {
         let mut rng = rand::thread_rng();
-        let perlin = Perlin::new(rng.r#gen());
+        let perlin = Perlin::new(rng.gen());
 
         let mut tiles = vec![vec![Tile::Empty; width]; height];
 
