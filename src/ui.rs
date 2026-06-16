@@ -31,7 +31,7 @@ pub(crate) fn ui(
         .split(f.size());
 
     let header_text = format!(
-        "Resource Simulation  Energy:{}  Crystals:{}  (q to quit)",
+        "Resource Simulation  Energy:{}  Crystals:{}  (press any key to quit)",
         totals.0, totals.1
     );
     let header = Paragraph::new(header_text)

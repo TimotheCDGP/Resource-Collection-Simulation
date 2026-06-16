@@ -41,7 +41,7 @@ docker run --rm -it -v "$(pwd):/workspace" resource-sim cargo run --release
 
 ## Contrôles
 
-- `q` ou `Échap` : quitter
+- N'importe quelle touche : quitter
 
 ## Architecture
 
