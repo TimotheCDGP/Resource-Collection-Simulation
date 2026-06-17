@@ -1,7 +1,17 @@
-//! Types de données partagés du monde simulé : ressources, robots, état global,
-//! événements échangés entre threads.
+//! Types partagés du monde.
+//!
+//! Idée directrice : on sépare clairement deux choses.
+//! - Le **monde physique** ([`World`]) : la seule vérité terrain, partagée
+//!   derrière un `Mutex`. On n'y met QUE ce qui doit rester cohérent entre
+//!   robots — leurs positions réelles et les stocks de ressources.
+//! - La **connaissance** : elle n'est PAS ici. Chaque robot a sa propre carte
+//!   mentale (voir [`crate::knowledge`]) et la partage avec les autres par
+//!   messages ([`Report`] vers la base, [`News`] de la base vers les robots).
 
 use std::collections::HashMap;
+
+/// Coordonnée d'une case `(x, y)`.
+pub(crate) type Pos = (usize, usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceKind {
@@ -15,32 +25,42 @@ pub(crate) enum RobotKind {
     Collector,
 }
 
-/// Connaissance d'une cellule par la base. Les robots démarrent en ne
-/// connaissant que les abords immédiats de la base ; le reste est `Unknown`
-/// jusqu'à ce qu'un robot le perçoive.
+/// Ce qu'un robot sait d'une case. `Unknown` = jamais perçue.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Knowledge {
+pub(crate) enum Cell {
     Unknown,
     Free,
     Obstacle,
 }
 
+/// Cases perçues (terrain) et gisements perçus : ce qui circule entre robots.
+pub(crate) type SeenCells = Vec<(Pos, Cell)>;
+pub(crate) type SeenResources = Vec<(Pos, ResourceKind)>;
+
+/// Monde physique partagé. Volontairement minimal : pas de connaissance ici,
+/// seulement la réalité que plusieurs robots doivent modifier de façon cohérente.
+pub(crate) struct World {
+    /// Position réelle de chaque robot (l'index est l'id du robot).
+    pub(crate) positions: Vec<Pos>,
+    /// Gisements restants : case -> (type, quantité).
+    pub(crate) resources: HashMap<Pos, (ResourceKind, u32)>,
+}
+
+/// Message d'un robot vers la base (communication asynchrone).
+pub(crate) enum Report {
+    /// Cases et ressources que le robot vient de découvrir (terrain + gisements).
+    Seen {
+        cells: SeenCells,
+        resources: SeenResources,
+    },
+    /// Une unité a été déposée à la base.
+    Delivered(ResourceKind),
+}
+
+/// Message de la base vers les robots : la connaissance fraîchement agrégée,
+/// rediffusée pour que chacun profite des découvertes des autres.
 #[derive(Clone)]
-pub(crate) struct Robot {
-    pub(crate) pos: (usize, usize),
-    pub(crate) kind: RobotKind,
-    pub(crate) carrying: Option<ResourceKind>,
-}
-
-pub(crate) struct WorldState {
-    pub(crate) resources: HashMap<(usize, usize), (ResourceKind, u32)>,
-    pub(crate) known: HashMap<(usize, usize), ResourceKind>,
-    pub(crate) known_map: Vec<Vec<Knowledge>>,
-    pub(crate) robots: Vec<Robot>,
-    pub(crate) totals: (u32, u32),
-}
-
-pub(crate) enum RobotEvent {
-    Discovered { pos: (usize, usize), kind: ResourceKind },
-    Collected { kind: ResourceKind, amount: u32 },
+pub(crate) struct News {
+    pub(crate) cells: SeenCells,
+    pub(crate) resources: SeenResources,
 }
