@@ -6,8 +6,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 
 use crate::world::Pos;
 

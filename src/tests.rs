@@ -86,9 +86,14 @@ fn la_simulation_tourne_partage_et_evite_les_collisions() {
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_millis(1500) {
-        let (mut cells, mut res) = (Vec::new(), Vec::new());
+        let (mut cells, mut res, mut gone) = (Vec::new(), Vec::new(), Vec::new());
         while let Ok(report) = report_rx.try_recv() {
-            if let Report::Seen { cells: c, resources: r } = report {
+            if let Report::Seen {
+                cells: c,
+                resources: r,
+                gone_resources: g,
+            } = report
+            {
                 for (p, cell) in c {
                     board.note_cell(p, cell);
                     cells.push((p, cell));
@@ -97,10 +102,18 @@ fn la_simulation_tourne_partage_et_evite_les_collisions() {
                     board.note_resource(p, kind);
                     res.push((p, kind));
                 }
+                for p in g {
+                    board.forget_resource(&p);
+                    gone.push(p);
+                }
             }
         }
-        if !cells.is_empty() || !res.is_empty() {
-            let news = News { cells, resources: res };
+        if !cells.is_empty() || !res.is_empty() || !gone.is_empty() {
+            let news = News {
+                cells,
+                resources: res,
+                gone_resources: gone,
+            };
             for sender in &news_senders {
                 let _ = sender.send(news.clone());
             }
@@ -111,13 +124,28 @@ fn la_simulation_tourne_partage_et_evite_les_collisions() {
     }
 
     // 1) La connaissance a circulé : la base sait plus que le carré de départ.
-    let known = board.cells.iter().flatten().filter(|c| **c != Cell::Unknown).count();
-    assert!(known > 9, "la base devrait avoir agrégé des découvertes (connu = {known})");
+    let known = board
+        .cells
+        .iter()
+        .flatten()
+        .filter(|c| **c != Cell::Unknown)
+        .count();
+    assert!(
+        known > 9,
+        "la base devrait avoir agrégé des découvertes (connu = {known})"
+    );
 
     // 2) Les robots ont exploré : plus de cases visitées que de robots.
-    assert!(visited.len() > kinds.len(), "les robots devraient se déplacer");
+    assert!(
+        visited.len() > kinds.len(),
+        "les robots devraient se déplacer"
+    );
 
     // 3) En régime établi, pas deux robots sur la même case.
     let unique: HashSet<_> = last_positions.iter().collect();
-    assert_eq!(unique.len(), last_positions.len(), "collision détectée : {last_positions:?}");
+    assert_eq!(
+        unique.len(),
+        last_positions.len(),
+        "collision détectée : {last_positions:?}"
+    );
 }

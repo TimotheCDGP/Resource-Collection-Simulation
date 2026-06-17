@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use noise::{NoiseFn, Perlin};
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 
 use crate::world::ResourceKind;
 

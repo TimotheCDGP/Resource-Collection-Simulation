@@ -5,11 +5,11 @@
 use std::collections::HashMap;
 
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
+    Frame,
 };
 
 use crate::map::Map;
@@ -44,9 +44,7 @@ pub(crate) fn ui(
             grid[y][x] = match cells[y][x] {
                 Cell::Unknown => ('.', Style::default().fg(Color::DarkGray)),
                 Cell::Obstacle => ('O', Style::default().fg(Color::LightCyan)),
-                Cell::Free if (x, y) == map.base => {
-                    ('#', Style::default().fg(Color::LightGreen))
-                }
+                Cell::Free if (x, y) == map.base => ('#', Style::default().fg(Color::LightGreen)),
                 Cell::Free => (' ', Style::default()),
             };
         }

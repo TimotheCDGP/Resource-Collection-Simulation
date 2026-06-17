@@ -18,7 +18,9 @@ use rand::rngs::ThreadRng;
 use crate::knowledge::{around, Knowledge};
 use crate::map::Map;
 use crate::pathfinding::{bfs_first_steps, random_step};
-use crate::world::{News, Pos, Report, ResourceKind, SeenCells, SeenResources, World};
+use crate::world::{
+    GoneResources, News, Pos, Report, ResourceKind, SeenCells, SeenResources, World,
+};
 
 /// Cadence d'un tick de robot.
 const TICK: Duration = Duration::from_millis(150);
@@ -40,7 +42,7 @@ pub(crate) fn run_scout(
     loop {
         absorb_news(&mut mind, &from_base);
 
-        let (new_cells, new_res) = {
+        let (new_cells, new_res, gone_res) = {
             let mut w = world.lock().unwrap();
             let pos = w.positions[id];
             let occupied = others(&w.positions, id);
@@ -49,14 +51,18 @@ pub(crate) fn run_scout(
             let (cells, res) = perceive(pos, &map, &w, SCOUT_VISION, &mut mind);
 
             // Avance vers une case réellement libre et inoccupée.
-            let next = random_step(pos, map.width, map.height, |p| {
-                map.passable(p) && !occupied.contains(&p)
-            }, &mut rng);
+            let next = random_step(
+                pos,
+                map.width,
+                map.height,
+                |p| map.passable(p) && !occupied.contains(&p),
+                &mut rng,
+            );
             w.positions[id] = next;
-            (cells, res)
+            (cells, res.0, res.1)
         };
 
-        report(&to_base, new_cells, new_res, None);
+        report(&to_base, new_cells, new_res, gone_res, None);
         thread::sleep(TICK);
     }
 }
@@ -79,10 +85,10 @@ pub(crate) fn run_collector(
         absorb_news(&mut mind, &from_base);
 
         // 1. Perception + éventuel dépôt/ramassage, sous un court verrou.
-        let (pos, new_cells, new_res, delivered, acted) = {
+        let (pos, new_cells, new_res, gone_res, delivered, acted) = {
             let mut w = world.lock().unwrap();
             let pos = w.positions[id];
-            let (cells, res) = perceive(pos, &map, &w, 1, &mut mind);
+            let (cells, (res, gone)) = perceive(pos, &map, &w, 1, &mut mind);
 
             let mut delivered = None;
             let acted;
@@ -111,10 +117,10 @@ pub(crate) fn run_collector(
             } else {
                 acted = false;
             }
-            (pos, cells, res, delivered, acted)
+            (pos, cells, res, gone, delivered, acted)
         };
 
-        report(&to_base, new_cells, new_res, delivered);
+        report(&to_base, new_cells, new_res, gone_res, delivered);
 
         // 2. Si on n'a ni déposé ni ramassé, on se déplace.
         if !acted {
@@ -125,9 +131,13 @@ pub(crate) fn run_collector(
                 next
             } else {
                 // Case visée murée ou occupée : petit pas libre pour ne pas coincer.
-                random_step(pos, map.width, map.height, |p| {
-                    map.passable(p) && !occupied.contains(&p)
-                }, &mut rng)
+                random_step(
+                    pos,
+                    map.width,
+                    map.height,
+                    |p| map.passable(p) && !occupied.contains(&p),
+                    &mut rng,
+                )
             };
             w.positions[id] = go;
         }
@@ -176,6 +186,9 @@ fn absorb_news(mind: &mut Knowledge, from_base: &Receiver<News>) {
         for (p, kind) in news.resources {
             mind.note_resource(p, kind);
         }
+        for p in news.gone_resources {
+            mind.forget_resource(&p);
+        }
     }
 }
 
@@ -187,9 +200,10 @@ fn perceive(
     world: &World,
     radius: i32,
     mind: &mut Knowledge,
-) -> (SeenCells, SeenResources) {
+) -> (SeenCells, (SeenResources, GoneResources)) {
     let mut new_cells = Vec::new();
     let mut new_res = Vec::new();
+    let mut gone_res = Vec::new();
 
     for (p, cell) in around(pos, map, radius) {
         if mind.cells[p.1][p.0] != cell {
@@ -201,9 +215,12 @@ fn perceive(
                 mind.note_resource(p, kind);
                 new_res.push((p, kind));
             }
+        } else if mind.resources.contains_key(&p) {
+            mind.forget_resource(&p);
+            gone_res.push(p);
         }
     }
-    (new_cells, new_res)
+    (new_cells, (new_res, gone_res))
 }
 
 /// Envoie à la base ce qui a été vu (si nouveau) et l'éventuel dépôt.
@@ -211,10 +228,15 @@ fn report(
     to_base: &Sender<Report>,
     cells: SeenCells,
     resources: SeenResources,
+    gone_resources: GoneResources,
     delivered: Option<ResourceKind>,
 ) {
-    if !cells.is_empty() || !resources.is_empty() {
-        let _ = to_base.send(Report::Seen { cells, resources });
+    if !cells.is_empty() || !resources.is_empty() || !gone_resources.is_empty() {
+        let _ = to_base.send(Report::Seen {
+            cells,
+            resources,
+            gone_resources,
+        });
     }
     if let Some(kind) = delivered {
         let _ = to_base.send(Report::Delivered(kind));

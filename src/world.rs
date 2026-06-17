@@ -36,6 +36,7 @@ pub(crate) enum Cell {
 /// Cases perçues (terrain) et gisements perçus : ce qui circule entre robots.
 pub(crate) type SeenCells = Vec<(Pos, Cell)>;
 pub(crate) type SeenResources = Vec<(Pos, ResourceKind)>;
+pub(crate) type GoneResources = Vec<Pos>;
 
 /// Monde physique partagé. Volontairement minimal : pas de connaissance ici,
 /// seulement la réalité que plusieurs robots doivent modifier de façon cohérente.
@@ -52,6 +53,7 @@ pub(crate) enum Report {
     Seen {
         cells: SeenCells,
         resources: SeenResources,
+        gone_resources: GoneResources,
     },
     /// Une unité a été déposée à la base.
     Delivered(ResourceKind),
@@ -63,4 +65,5 @@ pub(crate) enum Report {
 pub(crate) struct News {
     pub(crate) cells: SeenCells,
     pub(crate) resources: SeenResources,
+    pub(crate) gone_resources: GoneResources,
 }
