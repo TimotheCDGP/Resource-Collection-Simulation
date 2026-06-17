@@ -1,5 +1,11 @@
-//! Orchestration : génération du monde, spawn d'un thread par robot, drain
-//! du canal d'événements, snapshot pour le rendu, gestion du clavier.
+//! Orchestration et rôle de la BASE.
+//!
+//! La base génère le monde, lance un thread par robot, puis joue le rôle de
+//! centre de communication : elle relève les rapports des robots (canal unique
+//! robots -> base), agrège la connaissance commune, et la rediffuse à chacun
+//! (un canal base -> robot par robot). Elle dessine aussi l'affichage et gère
+//! le clavier. Le tout sans bloquer les robots : les échanges passent par des
+//! canaux, le `Mutex` du monde n'est pris que pour de courtes lectures.
 
 use std::collections::HashMap;
 use std::io;
@@ -10,104 +16,102 @@ use std::time::Duration;
 use crossterm::event::{self, Event};
 use ratatui::Terminal;
 
+use crate::knowledge::Knowledge;
 use crate::map::Map;
 use crate::robot::{run_collector, run_scout};
 use crate::ui::ui;
-use crate::world::{Knowledge, ResourceKind, Robot, RobotEvent, RobotKind, WorldState};
+use crate::world::{News, Pos, Report, ResourceKind, RobotKind, World};
 
 pub(crate) fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
 ) -> io::Result<()> {
-    let (map, initial_resources) = Map::new(80, 25);
+    let (map, resources) = Map::new(80, 25);
     let map = Arc::new(map);
 
-    let mut robots = Vec::new();
-    for _ in 0..3 {
-        robots.push(Robot {
-            pos: map.base,
-            kind: RobotKind::Scout,
-            carrying: None,
-        });
-    }
-    for _ in 0..2 {
-        robots.push(Robot {
-            pos: map.base,
-            kind: RobotKind::Collector,
-            carrying: None,
-        });
-    }
+    // 3 éclaireurs puis 2 collecteurs, tous au départ sur la base.
+    let kinds = vec![
+        RobotKind::Scout,
+        RobotKind::Scout,
+        RobotKind::Scout,
+        RobotKind::Collector,
+        RobotKind::Collector,
+    ];
 
-    let kinds: Vec<RobotKind> = robots.iter().map(|r| r.kind).collect();
-
-    // Carte de connaissance : tout est inconnu sauf les abords de la base,
-    // où les robots démarrent et perçoivent déjà le terrain.
-    let mut known_map = vec![vec![Knowledge::Unknown; map.width]; map.height];
-    for dy in -1i32..=1 {
-        for dx in -1i32..=1 {
-            let nx = map.base.0 as i32 + dx;
-            let ny = map.base.1 as i32 + dy;
-            if nx >= 0 && nx < map.width as i32 && ny >= 0 && ny < map.height as i32 {
-                known_map[ny as usize][nx as usize] = if map.passable((nx as usize, ny as usize))
-                {
-                    Knowledge::Free
-                } else {
-                    Knowledge::Obstacle
-                };
-            }
-        }
-    }
-
-    let state = Arc::new(Mutex::new(WorldState {
-        resources: initial_resources,
-        known: HashMap::new(),
-        known_map,
-        robots,
-        totals: (0, 0),
+    let world = Arc::new(Mutex::new(World {
+        positions: vec![map.base; kinds.len()],
+        resources,
     }));
 
-    let (tx, rx) = mpsc::channel::<RobotEvent>();
+    // Canaux : un seul robots -> base, et un base -> robot par robot.
+    let (report_tx, report_rx) = mpsc::channel::<Report>();
+    let mut news_senders: Vec<mpsc::Sender<News>> = Vec::new();
 
-    for (id, kind) in kinds.into_iter().enumerate() {
-        let tx_c = tx.clone();
+    for (id, &kind) in kinds.iter().enumerate() {
+        let (news_tx, news_rx) = mpsc::channel::<News>();
+        news_senders.push(news_tx);
+
         let map_c = Arc::clone(&map);
-        let state_c = Arc::clone(&state);
+        let world_c = Arc::clone(&world);
+        let report_c = report_tx.clone();
         thread::spawn(move || match kind {
-            RobotKind::Scout => run_scout(id, map_c, state_c, tx_c),
-            RobotKind::Collector => run_collector(id, map_c, state_c, tx_c),
+            RobotKind::Scout => run_scout(id, map_c, world_c, report_c, news_rx),
+            RobotKind::Collector => run_collector(id, map_c, world_c, report_c, news_rx),
         });
     }
-    drop(tx); // main no longer sends events
+    drop(report_tx); // la base n'émet pas de rapport
+
+    // Connaissance agrégée par la base (sert au rendu du brouillard) + compteurs.
+    let mut board = Knowledge::with_base_seen(&map);
+    let mut totals = (0u32, 0u32);
 
     loop {
-        // Drain any pending events and update aggregated state
-        loop {
-            match rx.try_recv() {
-                Ok(event) => {
-                    let mut s = state.lock().unwrap();
-                    match event {
-                        RobotEvent::Discovered { pos, kind } => {
-                            s.known.entry(pos).or_insert(kind);
-                        }
-                        RobotEvent::Collected { kind, amount } => match kind {
-                            ResourceKind::Energy => s.totals.0 += amount,
-                            ResourceKind::Crystal => s.totals.1 += amount,
-                        },
+        // 1. Relève les rapports, agrège, et rediffuse les nouveautés à tous.
+        let mut fresh_cells = Vec::new();
+        let mut fresh_res = Vec::new();
+        while let Ok(report) = report_rx.try_recv() {
+            match report {
+                Report::Seen { cells, resources } => {
+                    for (p, cell) in cells {
+                        board.note_cell(p, cell);
+                        fresh_cells.push((p, cell));
+                    }
+                    for (p, kind) in resources {
+                        board.note_resource(p, kind);
+                        fresh_res.push((p, kind));
                     }
                 }
-                Err(_) => break,
+                Report::Delivered(kind) => match kind {
+                    ResourceKind::Energy => totals.0 += 1,
+                    ResourceKind::Crystal => totals.1 += 1,
+                },
+            }
+        }
+        if !fresh_cells.is_empty() || !fresh_res.is_empty() {
+            let news = News {
+                cells: fresh_cells,
+                resources: fresh_res,
+            };
+            for sender in &news_senders {
+                let _ = sender.send(news.clone());
             }
         }
 
-        // Snapshot for rendering, then release the lock before drawing
-        let snap = {
-            let s = state.lock().unwrap();
-            (s.robots.clone(), s.known_map.clone(), s.known.clone(), s.totals)
+        // 2. Photo pour le rendu : positions réelles + gisements encore présents.
+        let (positions, visible_res) = {
+            let w = world.lock().unwrap();
+            let visible: HashMap<Pos, ResourceKind> = board
+                .resources
+                .iter()
+                .filter(|(p, _)| w.resources.contains_key(p))
+                .map(|(&p, &k)| (p, k))
+                .collect();
+            (w.positions.clone(), visible)
         };
 
-        terminal.draw(|f| ui(f, &map, &snap.0, &snap.1, &snap.2, snap.3))?;
+        terminal.draw(|f| ui(f, &map, &board.cells, &visible_res, &positions, &kinds, totals))?;
 
+        // 3. Toute pression de touche quitte (exigé par le sujet).
         if event::poll(Duration::from_millis(100))? {
-            // Spec : toute pression de touche quitte la simulation.
             if let Event::Key(key) = event::read()? {
                 if key.kind == event::KeyEventKind::Press {
                     return Ok(());

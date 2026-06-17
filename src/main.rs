@@ -10,11 +10,15 @@ use ratatui::{
 };
 
 mod app;
+mod knowledge;
 mod map;
 mod pathfinding;
 mod robot;
 mod ui;
 mod world;
+
+#[cfg(test)]
+mod tests;
 
 fn main() -> io::Result<()> {
     enable_raw_mode()?;

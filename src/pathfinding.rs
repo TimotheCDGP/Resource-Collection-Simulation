@@ -1,22 +1,25 @@
-//! Helpers de navigation sur la `Map` : marche aléatoire évitant les obstacles
-//! et BFS calculant le premier pas du plus court chemin vers chaque cellule
-//! atteignable.
+//! Navigation : marche aléatoire et BFS « premier pas ».
+//!
+//! Les deux fonctions sont génériques sur une closure qui décide si une case est
+//! utilisable. Elles servent donc indifféremment sur le terrain réel (pour
+//! bouger) ou sur la carte mentale d'un robot (pour planifier).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use rand::Rng;
 use rand::seq::SliceRandom;
 
-use crate::map::Map;
+use crate::world::Pos;
 
-/// Pas aléatoire vers une case voisine traversable et non occupée par un autre
-/// robot. Si aucune case libre n'est disponible, le robot reste sur place.
+/// Pas aléatoire vers une case voisine telle que `free(case)` est vraie. Si
+/// aucune voisine n'est libre, le robot reste sur place (renvoie `from`).
 pub(crate) fn random_step(
-    from: (usize, usize),
-    map: &Map,
-    occupied: &HashSet<(usize, usize)>,
+    from: Pos,
+    width: usize,
+    height: usize,
+    free: impl Fn(Pos) -> bool,
     rng: &mut impl Rng,
-) -> (usize, usize) {
+) -> Pos {
     let (x, y) = from;
     let mut dirs: [(i32, i32); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
     dirs.shuffle(rng);
@@ -27,32 +30,27 @@ pub(crate) fn random_step(
             continue;
         }
         let (nx, ny) = (nx as usize, ny as usize);
-        if nx >= map.width || ny >= map.height {
+        if nx >= width || ny >= height {
             continue;
         }
-        if !map.passable((nx, ny)) {
-            continue;
+        if free((nx, ny)) {
+            return (nx, ny);
         }
-        if occupied.contains(&(nx, ny)) {
-            continue;
-        }
-        return (nx, ny);
     }
     from
 }
 
-/// BFS générique depuis `from`. La closure `passable` décide de la
-/// franchissabilité de chaque cellule, ce qui permet de planifier aussi bien
-/// sur le terrain réel que sur la carte de connaissance. Retourne, pour chaque
-/// cellule atteignable, le premier pas à faire depuis `from`.
+/// BFS depuis `from`. `passable` décide de la franchissabilité de chaque case.
+/// Retourne, pour chaque case atteignable, le premier pas à faire depuis `from`
+/// pour s'y rendre par un plus court chemin.
 pub(crate) fn bfs_first_steps(
-    from: (usize, usize),
+    from: Pos,
     width: usize,
     height: usize,
-    passable: impl Fn((usize, usize)) -> bool,
-) -> HashMap<(usize, usize), (usize, usize)> {
-    let mut first_step: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
-    let mut queue: VecDeque<((usize, usize), (usize, usize))> = VecDeque::new();
+    passable: impl Fn(Pos) -> bool,
+) -> HashMap<Pos, Pos> {
+    let mut first_step: HashMap<Pos, Pos> = HashMap::new();
+    let mut queue: VecDeque<(Pos, Pos)> = VecDeque::new();
     first_step.insert(from, from);
     queue.push_back((from, from));
 
@@ -68,12 +66,11 @@ pub(crate) fn bfs_first_steps(
                 continue;
             }
             let np = (nxu, nyu);
-            if !passable(np) {
+            if !passable(np) || first_step.contains_key(&np) {
                 continue;
             }
-            if first_step.contains_key(&np) {
-                continue;
-            }
+            // Le premier pas est la case elle-même si on part de `from`,
+            // sinon on hérite du premier pas de la case d'où l'on vient.
             let new_fs = if p == from { np } else { fs };
             first_step.insert(np, new_fs);
             queue.push_back((np, new_fs));
